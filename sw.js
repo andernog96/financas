@@ -1,5 +1,5 @@
 // Cache simples para abrir o app offline. Os dados ficam no localStorage e no Google Drive.
-const CACHE = 'financas-v1';
+const CACHE = 'financas-v2';
 const FILES = ['./', 'index.html', 'styles.css', 'js/app.js', 'js/core.js', 'js/drive.js', 'js/pluggy.js', 'js/config.js', 'js/demo.js', 'icon.svg', 'manifest.webmanifest'];
 self.addEventListener('install', e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting())));
 self.addEventListener('activate', e => e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())));
