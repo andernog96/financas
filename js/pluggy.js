@@ -8,7 +8,9 @@ export const pluggyConfigured = () => !!workerUrl() && !!appKey();
 
 async function api(path, init = {}) {
   if (!pluggyConfigured()) throw new Error('Configure o endereço do Worker e a chave do app em Ajustes');
+  // cache: 'no-store' — sem isso o navegador pode guardar respostas de erro (ex.: 410) e repeti-las
   const r = await fetch(`${workerUrl()}${path}`, {
+    cache: 'no-store',
     ...init, headers: { 'Content-Type': 'application/json', 'X-App-Key': appKey(), ...(init.headers || {}) },
   });
   const data = await r.json().catch(() => ({}));
