@@ -480,7 +480,7 @@ function viewSettings() {
         <label class="f">Chave do app (APP_KEY)<input type="password" data-chg="appKey" value="${esc(localStorage.getItem('appKey') || '')}" autocomplete="off"></label>
       </div>
       <div class="row mt wrap"><button class="btn" data-act="testWorker">Testar conexão</button><button class="btn primary" data-act="connectBank">Conectar banco / cartão</button><button class="btn" data-act="syncBanks" ${items.length ? '' : 'disabled'}>Sincronizar tudo</button></div>
-      <p class="tiny mt-s">No widget, escolha <b>MeuPluggy</b> e autorize. Repita uma vez por banco conectado no Meu Pluggy.</p>
+      <p class="tiny mt-s">No widget, escolha <b>MeuPluggy</b> e autorize. Repita uma vez por banco conectado no Meu Pluggy.<br>O app <b>sincroniza sozinho</b> ao ser aberto (se a última atualização tiver mais de ${AUTO_SYNC_HOURS} h). O Meu Pluggy busca os dados nos bancos 1× por dia.</p>
       <div class="list mt">${items.map(i => `<div class="li"><div class="main"><div class="title">${esc(i.connectorName || i.label || i.id)}</div><div class="meta">${i.status ? `<span class="chip ${i.status === 'UPDATED' ? 'ok' : 'warn'}">${esc(i.status)}</span>` : ''}<span>${i.lastSync ? `sincronizado ${new Date(i.lastSync).toLocaleString('pt-BR')}` : 'nunca sincronizado'}</span></div></div>
         <button class="btn ghost sm" data-act="syncItem" data-id="${esc(i.id)}">Sincronizar</button><button class="btn ghost sm" data-act="reconnectItem" data-id="${esc(i.id)}">Reconectar</button><button class="btn ghost sm danger" data-act="delItem" data-id="${esc(i.id)}">Remover</button></div>`).join('')}</div>
       <details class="small mt"><summary>Adicionar conexão pelo ID (item já criado no painel da Pluggy)</summary><div class="row mt-s"><input type="text" id="itemId" placeholder="ID do item" style="flex:1"><button class="btn" data-act="addItemId">Adicionar</button></div></details>
@@ -538,7 +538,7 @@ async function onClick(e) {
       case 'addRule': { const p = $('#rulePat').value.trim(); if (!p) break; state.rules.push({ id: C.uid('rule'), pattern: C.norm(p), category: $('#ruleCat').value, updatedAt: C.nowIso() }); save(); render(); break; }
       case 'delRule': { const r = state.rules.find(r => r.id === id); r.deleted = true; touch(r); save(); render(); break; }
       case 'reapplyRules': { let n = 0; for (const t of live(state.transactions)) { if (t.categoryLocked) continue; const c = C.categorize(t, state.rules); if (c !== t.category) { t.category = c; touch(t); n++; } } save(); render(); toast(`${n} lançamento(s) recategorizado(s)`); break; }
-      case 'signIn': await Drive.signIn(true); render(); await syncDrive(true); break;
+      case 'signIn': await Drive.signIn(true); render(); await syncDrive(true); autoSync(); break;
       case 'signOut': Drive.signOut(); setSync('', 'Offline'); render(); break;
       case 'syncDrive': await syncDrive(true); break;
       case 'createFile': { closeModal(); const f = await Drive.create(state); toast('Arquivo criado no Drive. Compartilhe-o com sua esposa como Editor.'); setSync('ok', 'Drive'); break; }
@@ -574,14 +574,32 @@ async function onClick(e) {
   } catch (err) { console.error(err); toast(err.message || String(err)); }
 }
 
-async function doSync(items) {
+let bankSyncing = false;
+async function doSync(items, quiet = false) {
+  if (bankSyncing) return;
+  bankSyncing = true;
   setSync('busy', 'Baixando do banco…');
   let added = 0;
   try {
     for (const it of items.filter(Boolean)) added += await Pluggy.syncItem(state, it, msg => setSync('busy', msg));
-    save(); render(); toast(`Sincronizado: ${added} lançamento(s) novo(s)`);
-    setSync('ok', 'Bancos atualizados');
+    localStorage.setItem('lastBankSync', C.nowIso());
+    save(); render();
+    if (!quiet || added) toast(`Sincronizado: ${added} lançamento(s) novo(s)`);
+    setSync('ok', `Bancos · ${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`);
   } catch (e) { setSync('err', 'Erro na sincronização'); throw e; }
+  finally { bankSyncing = false; }
+}
+
+// Sincronização automática: ao abrir o app e ao voltar para ele, se a última
+// atualização dos bancos tiver mais de AUTO_SYNC_HOURS (o Meu Pluggy atualiza 1x/dia).
+const AUTO_SYNC_HOURS = 3;
+async function autoSync() {
+  if (state.demo || !Pluggy.pluggyConfigured()) return;
+  const items = live(state.items);
+  if (!items.length) return;
+  const last = Math.min(...items.map(i => Date.parse(i.lastSync || 0) || 0));
+  if (Date.now() - last < AUTO_SYNC_HOURS * 3600e3) return;
+  try { await doSync(items, true); } catch (e) { console.warn('auto-sync', e); }
 }
 
 function onChange(e) {
@@ -642,8 +660,13 @@ window.addEventListener('resize', () => { clearTimeout(window._rz); window._rz =
 // ---------------- início ----------------
 render();
 setSync('', state.demo ? 'Demonstração' : (Drive.driveConfigured() ? 'Offline' : 'Só neste aparelho'));
-if (!state.demo && Drive.driveConfigured()) {
-  if (Drive.isSignedIn()) syncDrive(false);
-  else if (localStorage.getItem('driveConsent')) $('#sync').innerHTML = `<button class="btn sm" data-act="signIn">Entrar no Drive</button>`;
-}
+(async () => {
+  if (!state.demo && Drive.driveConfigured()) {
+    // primeiro traz o que está no Drive (pode já ter sido sincronizado no outro celular)
+    if (Drive.isSignedIn()) await syncDrive(false);
+    else if (localStorage.getItem('driveConsent')) $('#sync').innerHTML = `<button class="btn sm" data-act="signIn">Entrar no Drive</button>`;
+  }
+  await autoSync();
+})();
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') autoSync(); });
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
